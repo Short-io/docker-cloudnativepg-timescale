@@ -31,3 +31,7 @@ spec:
       postInitTemplateSQL:
         - CREATE EXTENSION IF NOT EXISTS timescaledb;
 ```
+
+## License notes
+
+TimescaleDB is distributed under TSL license, you need to check if you are allowed to use this package here: https://www.timescale.com/legal/licenses
