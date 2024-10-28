@@ -1,4 +1,4 @@
-# CloudNativePG Containers with TimescaleDB
+# CloudNativePG Containers with TimescaleDB and TimescaleDB Toolkit
 
 [![Build](https://github.com/clevyr/docker-cloudnativepg-timescale/actions/workflows/build.yaml/badge.svg)](https://github.com/clevyr/docker-cloudnativepg-timescale/actions/workflows/build.yaml)
 
@@ -30,6 +30,7 @@ spec:
     initdb:
       postInitTemplateSQL:
         - CREATE EXTENSION IF NOT EXISTS timescaledb;
+        - CREATE EXTENSION IF NOT EXISTS timescaledb_toolkit;
 ```
 
 ## License notes
