@@ -1,57 +1,57 @@
 name: Build
 
-on: push
-
-env:
-  # renovate datasource=github-releases depName=timescale/timescaledb
-  TIMESCALE_VERSION: 2.24.0
-
-  # renovate datasource=github-releases depName=timescale/timescaledb-toolkit
-  TIMESCALE_TOOLKIT_VERSION: 1.22.0
+on:
+  push:
+  schedule:
+    # Weekly, Sunday 00:00 UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build Image (pg${{ matrix.postgres_version }})
+    name: Build Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    strategy:
-      matrix:
-        include:
-          - postgres_version: "16.11"
-            # renovate datasource=docker depName=ghcr.io/cloudnative-pg/postgresql
-            cnpg_version: 16.11
-            latest: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Get CloudNativePG version
-        id: cnpg
+      - name: Resolve latest versions
+        id: versions
         env:
-          VERSION: ${{ matrix.cnpg_version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+
+          ts=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/timescale/timescaledb/releases/latest \
+            | jq -r .tag_name | sed 's/^v//')
+          tk=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/timescale/timescaledb-toolkit/releases/latest \
+            | jq -r .tag_name | sed 's/^v//')
+
+          reg_token=$(curl -fsSL 'https://ghcr.io/token?service=ghcr.io&scope=repository:cloudnative-pg/postgresql:pull' | jq -r .token)
+          pg=$(curl -fsSL -H "Authorization: Bearer $reg_token" \
+            'https://ghcr.io/v2/cloudnative-pg/postgresql/tags/list?n=10000' \
+            | jq -r '.tags[]' | grep -E '^16\.[0-9]+$' | sort -V | tail -1)
+
           {
-            echo "version=$VERSION"
-            echo "minor=$(cut -d- -f1 <<<"$VERSION")"
-            echo "major=$(cut -d. -f1 <<<"$VERSION")"
-          } >> $GITHUB_OUTPUT
-      - name: Get Timescale version
-        id: timescale
-        run: |
+            echo "timescale=$ts"
+            echo "timescale_minor=$(echo "$ts" | cut -d. -f-2)"
+            echo "timescale_major=$(echo "$ts" | cut -d. -f1)"
+            echo "timescale_toolkit=$tk"
+            echo "postgres=$pg"
+            echo "postgres_minor=$(echo "$pg" | cut -d. -f-2)"
+            echo "postgres_major=$(echo "$pg" | cut -d. -f1)"
+          } >> "$GITHUB_OUTPUT"
+
           {
-            echo "version=$TIMESCALE_VERSION"
-            echo "minor=$(cut -d. -f-2 <<<"$TIMESCALE_VERSION")"
-            echo "major=$(cut -d. -f1 <<<"$TIMESCALE_VERSION")"
-          } >> $GITHUB_OUTPUT
-      - name: Get Timescale Toolkit version
-        id: timescale_toolkit
-        run: |
-          {
-            echo "version=$TIMESCALE_TOOLKIT_VERSION"
-            echo "minor=$(cut -d. -f-2 <<<"$TIMESCALE_TOOLKIT_VERSION")"
-            echo "major=$(cut -d. -f1 <<<"$TIMESCALE_TOOLKIT_VERSION")"
-          } >> $GITHUB_OUTPUT
+            echo "## Resolved versions"
+            echo "- TimescaleDB: \`$ts\`"
+            echo "- TimescaleDB Toolkit: \`$tk\`"
+            echo "- PostgreSQL (CNPG): \`$pg\`"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -60,13 +60,13 @@ jobs:
             ghcr.io/${{ github.repository_owner }}/cloudnativepg-timescale
           flavor: latest=false
           tags: |
-            type=raw,priority=1000,value=latest,enable=${{ matrix.latest || 'false' }}
-            type=raw,priority=999,value=${{ steps.cnpg.outputs.version }}-ts${{ steps.timescale.outputs.version }}
-            type=raw,priority=998,value=${{ steps.cnpg.outputs.minor }}-ts${{ steps.timescale.outputs.minor }}
-            type=raw,priority=997,value=${{ steps.cnpg.outputs.major }}-ts${{ steps.timescale.outputs.major }}
-            type=raw,priority=996,value=${{ steps.cnpg.outputs.version }}
-            type=raw,priority=995,value=${{ steps.cnpg.outputs.minor }}
-            type=raw,priority=994,value=${{ steps.cnpg.outputs.major }}
+            type=raw,priority=1000,value=latest
+            type=raw,priority=999,value=${{ steps.versions.outputs.postgres }}-ts${{ steps.versions.outputs.timescale }}
+            type=raw,priority=998,value=${{ steps.versions.outputs.postgres_minor }}-ts${{ steps.versions.outputs.timescale_minor }}
+            type=raw,priority=997,value=${{ steps.versions.outputs.postgres_major }}-ts${{ steps.versions.outputs.timescale_major }}
+            type=raw,priority=996,value=${{ steps.versions.outputs.postgres }}
+            type=raw,priority=995,value=${{ steps.versions.outputs.postgres_minor }}
+            type=raw,priority=994,value=${{ steps.versions.outputs.postgres_major }}
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Buildx
@@ -87,20 +87,9 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            POSTGRES_VERSION=${{ matrix.postgres_version }}
-            CLOUDNATIVEPG_VERSION=${{ steps.cnpg.outputs.version }}
-            TIMESCALE_VERSION=${{ steps.timescale.outputs.version }}
-            TIMESCALE_TOOLKIT_VERSION=${{ steps.timescale_toolkit.outputs.version }}
+            POSTGRES_VERSION=${{ steps.versions.outputs.postgres }}
+            CLOUDNATIVEPG_VERSION=${{ steps.versions.outputs.postgres }}
+            TIMESCALE_VERSION=${{ steps.versions.outputs.timescale }}
+            TIMESCALE_TOOLKIT_VERSION=${{ steps.versions.outputs.timescale_toolkit }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  # Summarize matrix https://github.community/t/status-check-for-a-matrix-jobs/127354/7
-  build-success:
-    name: Build Successful
-    runs-on: ubuntu-latest
-    needs: build
-    if: ${{ always() }}
-    steps:
-      - if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
-        name: Check matrix status
-        run: exit 1
