@@ -11,9 +11,14 @@ A Dockerfile + GitHub Actions pipeline that layers TimescaleDB and TimescaleDB T
 Versions are **not pinned** in this repo. The `Resolve latest versions` step in `.github/workflows/build.yaml` fetches them at build time:
 
 - TimescaleDB + Toolkit: GitHub `releases/latest` of `timescale/timescaledb` and `timescale/timescaledb-toolkit` (leading `v` stripped).
-- PostgreSQL / CNPG: `ghcr.io/v2/cloudnative-pg/postgresql/tags/list`, filtered to `^16\.[0-9]+$` and `sort -V | tail -1`. Only Postgres 16 is tracked — to add another major, add a parallel filter or matrix, don't change `16` in place.
+- PostgreSQL: `https://www.postgresql.org/versions.json` is queried for `latestMinor` of PG major `16` (`PG_MAJOR` env in the step). We then HEAD-probe `ghcr.io/v2/cloudnative-pg/postgresql/manifests/16.<minor>` and walk back one minor at a time until we get a `200` — this tolerates the lag between an upstream PG release and CNPG re-publishing. The tags/list endpoint is intentionally **not** used: it's capped at 1000 entries per page and CNPG has enough historical tags that a plain-minor tag like `16.13` can fall off the first page.
 
-`POSTGRES_VERSION` and `CLOUDNATIVEPG_VERSION` are fed the **same** resolved value (the CNPG tag like `16.11`). The Dockerfile uses `$POSTGRES_VERSION` inside the Timescale apt package name, so this relies on Timescale's Debian repo accepting the full `major.minor` (or on apt's loose matching for the major). If a scheduled build starts failing on `apt-get install` of `timescaledb-2-postgresql-<ver>`, verify the packagecloud triplet first — upstream may not have published yet for a brand-new CNPG minor.
+Two build args derive from different halves of the resolved version:
+
+- `CLOUDNATIVEPG_VERSION` = the full probed tag (e.g. `16.13`) — used as the `FROM` tag.
+- `POSTGRES_VERSION` = the PG major only (e.g. `16`) — used inside the Timescale apt package name `timescaledb-2-postgresql-<major>`. Passing the full `16.13` here will fail (`E: Unable to locate package timescaledb-2-postgresql-16.13`) — Timescale's Debian packages are keyed on the PG major, not the minor.
+
+Changing the tracked PG major means updating `PG_MAJOR` in the resolver step; there is no matrix anymore.
 
 Renovate (`renovate.json`) no longer drives these versions; its regex managers now match nothing in `build.yaml` but are left in place for future use. Don't reintroduce the old Renovate comment pragmas — they'd fight the runtime resolver.
 

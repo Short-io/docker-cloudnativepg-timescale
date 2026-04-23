@@ -21,9 +21,11 @@ jobs:
         id: versions
         env:
           GH_TOKEN: ${{ github.token }}
+          PG_MAJOR: "16"
         run: |
           set -euo pipefail
 
+          # Timescale + Toolkit: latest GitHub release (strip leading 'v')
           ts=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
             https://api.github.com/repos/timescale/timescaledb/releases/latest \
             | jq -r .tag_name | sed 's/^v//')
@@ -31,10 +33,23 @@ jobs:
             https://api.github.com/repos/timescale/timescaledb-toolkit/releases/latest \
             | jq -r .tag_name | sed 's/^v//')
 
-          reg_token=$(curl -fsSL 'https://ghcr.io/token?service=ghcr.io&scope=repository:cloudnative-pg/postgresql:pull' | jq -r .token)
-          pg=$(curl -fsSL -H "Authorization: Bearer $reg_token" \
-            'https://ghcr.io/v2/cloudnative-pg/postgresql/tags/list?n=10000' \
-            | jq -r '.tags[]' | grep -E '^16\.[0-9]+$' | sort -V | tail -1)
+          # Latest PG minor from postgresql.org, then probe CNPG for a published tag,
+          # walking back if CNPG hasn't republished yet.
+          pg_minor=$(curl -fsSL https://www.postgresql.org/versions.json \
+            | jq -r --arg m "$PG_MAJOR" '.[] | select(.major == $m) | .latestMinor')
+          reg_token=$(curl -fsSL "https://ghcr.io/token?service=ghcr.io&scope=repository:cloudnative-pg/postgresql:pull" | jq -r .token)
+          pg=""
+          for n in $(seq "$pg_minor" -1 0); do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer $reg_token" \
+              -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.docker.distribution.manifest.v2+json" \
+              "https://ghcr.io/v2/cloudnative-pg/postgresql/manifests/${PG_MAJOR}.${n}")
+            if [ "$code" = "200" ]; then pg="${PG_MAJOR}.${n}"; break; fi
+          done
+          if [ -z "$pg" ]; then
+            echo "No ${PG_MAJOR}.x tag found on ghcr.io/cloudnative-pg/postgresql" >&2
+            exit 1
+          fi
 
           {
             echo "timescale=$ts"
@@ -42,15 +57,14 @@ jobs:
             echo "timescale_major=$(echo "$ts" | cut -d. -f1)"
             echo "timescale_toolkit=$tk"
             echo "postgres=$pg"
-            echo "postgres_minor=$(echo "$pg" | cut -d. -f-2)"
-            echo "postgres_major=$(echo "$pg" | cut -d. -f1)"
+            echo "postgres_major=$PG_MAJOR"
           } >> "$GITHUB_OUTPUT"
 
           {
             echo "## Resolved versions"
             echo "- TimescaleDB: \`$ts\`"
             echo "- TimescaleDB Toolkit: \`$tk\`"
-            echo "- PostgreSQL (CNPG): \`$pg\`"
+            echo "- PostgreSQL (CNPG): \`$pg\` (PG major \`$PG_MAJOR\`)"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Docker meta
         id: meta
@@ -62,11 +76,10 @@ jobs:
           tags: |
             type=raw,priority=1000,value=latest
             type=raw,priority=999,value=${{ steps.versions.outputs.postgres }}-ts${{ steps.versions.outputs.timescale }}
-            type=raw,priority=998,value=${{ steps.versions.outputs.postgres_minor }}-ts${{ steps.versions.outputs.timescale_minor }}
+            type=raw,priority=998,value=${{ steps.versions.outputs.postgres }}-ts${{ steps.versions.outputs.timescale_minor }}
             type=raw,priority=997,value=${{ steps.versions.outputs.postgres_major }}-ts${{ steps.versions.outputs.timescale_major }}
             type=raw,priority=996,value=${{ steps.versions.outputs.postgres }}
-            type=raw,priority=995,value=${{ steps.versions.outputs.postgres_minor }}
-            type=raw,priority=994,value=${{ steps.versions.outputs.postgres_major }}
+            type=raw,priority=995,value=${{ steps.versions.outputs.postgres_major }}
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Buildx
@@ -87,7 +100,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            POSTGRES_VERSION=${{ steps.versions.outputs.postgres }}
+            POSTGRES_VERSION=${{ steps.versions.outputs.postgres_major }}
             CLOUDNATIVEPG_VERSION=${{ steps.versions.outputs.postgres }}
             TIMESCALE_VERSION=${{ steps.versions.outputs.timescale }}
             TIMESCALE_TOOLKIT_VERSION=${{ steps.versions.outputs.timescale_toolkit }}
