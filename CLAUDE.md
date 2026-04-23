@@ -28,7 +28,9 @@ Renovate (`renovate.json`) no longer drives these versions; its regex managers n
 
 ## Build contract
 
-`Dockerfile` consumes four build args: `CLOUDNATIVEPG_VERSION`, `POSTGRES_VERSION`, `TIMESCALE_VERSION`, `TIMESCALE_TOOLKIT_VERSION`. It installs `timescaledb-2-postgresql-$POSTGRES_VERSION=$TIMESCALE_VERSION~debian$VERSION_ID` and the Toolkit as `=1:$TIMESCALE_TOOLKIT_VERSION~debian$VERSION_ID`, so upstream has to have published a matching `~debianNN` package before a build will succeed.
+`Dockerfile` consumes four build args: `CLOUDNATIVEPG_VERSION`, `POSTGRES_VERSION`, `TIMESCALE_VERSION`, `TIMESCALE_TOOLKIT_VERSION`. The Toolkit installs as `=1:$TIMESCALE_TOOLKIT_VERSION~debian$VERSION_ID`.
+
+TimescaleDB's package version is **resolved via `apt-cache madison`** at build time rather than pinned as `$TIMESCALE_VERSION~debian$VERSION_ID`. Starting with TimescaleDB 2.23.1, Timescale's Debian packages embed the target PG minor as a trailing suffix (e.g. `2.26.3~debian11-1613` for PG 16.13); the plain `~debianNN` form is no longer published. The resolver accepts either the plain form or the first `~debianNN-…` match, so the build works whether upstream keeps the new scheme or reverts.
 
 The image ends with `USER 26` (the `postgres` user id CNPG expects). Do not add layers after that as root without resetting the user.
 

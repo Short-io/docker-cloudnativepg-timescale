@@ -21,8 +21,14 @@ RUN <<EOT
   curl -Lsf https://packagecloud.io/timescale/timescaledb/gpgkey | gpg --dearmor >/etc/apt/trusted.gpg.d/timescale.gpg
 
   # Install Timescale
+  # Since 2.23.1, Timescale's debian packages append a -<pgMaj><pgMin> suffix
+  # (e.g. 2.26.3~debian11-1613). Resolve the published version from the repo
+  # so we match either the plain form or the newest matching suffixed form.
   apt-get update
-  apt-get install -y --no-install-recommends "timescaledb-2-postgresql-$POSTGRES_VERSION=$TIMESCALE_VERSION~debian$VERSION_ID"
+  ts_ver=$(apt-cache madison "timescaledb-2-postgresql-$POSTGRES_VERSION" \
+    | awk -v v="$TIMESCALE_VERSION~debian$VERSION_ID" '$3==v || index($3, v"-")==1 {print $3; exit}')
+  [ -n "$ts_ver" ] || { echo "no timescaledb-2-postgresql-$POSTGRES_VERSION=$TIMESCALE_VERSION~debian$VERSION_ID* in apt" >&2; exit 1; }
+  apt-get install -y --no-install-recommends "timescaledb-2-postgresql-$POSTGRES_VERSION=$ts_ver"
 
   # Install Timescale Toolkit
   apt-get update
